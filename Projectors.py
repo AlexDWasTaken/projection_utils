@@ -18,11 +18,11 @@ class ScreenProjector():
         self.height = height
         self.intrinsic = intrinsic
         self.reference = reference
-        self.real_world_reference = self.recover_camera_coordinates(reference, intrinsic, distance)
+        self.real_world_reference = self.recover_camera_coordinates(reference, distance)
         self.screen_width = screen_width
         self.screen_height = screen_height
         
-    def recover_camera_coordinates(self, pixel_coords, camera_matrix, distance):
+    def recover_camera_coordinates(self, pixel_coords, distance, log=False):
         """
         pixel_coords: 2D 像素坐标系 (x, y) [shape: (N, 2)]
         
@@ -30,44 +30,66 @@ class ScreenProjector():
         
         distance: 距离
         """
+
+        # 补全像素坐标
         pixel_coords = np.array(pixel_coords)
         if pixel_coords.ndim == 1:
             pixel_coords = np.expand_dims(pixel_coords, axis=0)
-        # 补全像素坐标
+            
         homogeneous_coords = np.concatenate((pixel_coords, np.ones((pixel_coords.shape[0], 1))), axis=1)  # shape: (N, 3)
 
         # 算回去
-        normalized_coords = np.linalg.inv(camera_matrix) @ homogeneous_coords.T  # shape: (3, N)
+        normalized_coords = np.linalg.inv(self.intrinsic) @ homogeneous_coords.T  # shape: (3, N)
         scaled_coords = normalized_coords * distance
 
+        if log:
+            print("____________Recover Cam Coords______________")
+            print(f"Pixel coords: {pixel_coords}")
+            print(f"Inverse intrinsics: {np.linalg.inv(self.intrinsic)}")
+            print(f"Recovered coords: {scaled_coords.T}")
+        
         return scaled_coords.T  # transpose to shape: (N, 3)
     
-    def pixel_coords_to_screen_coords(self, pixel_coords):
-        x = pixel_coords[0] / self.width * self.screen_width
+    def pixel_coords_to_cam_coords(self, pixel_coords):
+        x = - pixel_coords[0] / self.width * self.screen_width + 0.5 * self.screen_width
         y = pixel_coords[1] / self.height * self.screen_height
         return np.array((x, y, 0)) 
     
     def cam_to_head(self, cam_coor):
         return np.array((-cam_coor[0], -cam_coor[2], -cam_coor[1]))
     
-    def calculate(self, current_real_coords, remote_pixel_coords):
+    def calculate(self, current_real_coords, remote_pixel_coords, log = True):
         """
         All the coordinates involved here are in real-world coordinates,
         though it doesn't matter in this scenerio.
+        
+        The head coordinate:
+        
+        x points from left to right
+        
+        z points up
         """
-        virtual_remote_position = self.pixel_coords_to_screen_coords(remote_pixel_coords)
-        gaze_vector = virtual_remote_position - current_real_coords
+        virtual_remote_position = self.pixel_coords_to_cam_coords(remote_pixel_coords)
+        gaze_vector = (virtual_remote_position - current_real_coords)[0]
         gaze_vector_head = self.cam_to_head(gaze_vector)
-        gaze_vector_head = gaze_vector_head[0]
         direction = gaze_vector_head / np.linalg.norm(gaze_vector_head)
         
-        yaw = -np.arctan2(direction[1], direction[0])
-        pitch = np.arcsin(direction[1])
-        # Assume roll = 0.0
+        if log:
+            print("___________Coordinate Calc Details_____________")
+            print(f"Current viewpoint cam coord: {current_real_coords}")
+            print(f"Virtual remote vector in cam coord: {virtual_remote_position}")        
+            print(f"Gaze vector in cam coord: {gaze_vector}")
+            print(f"Gaze vector in head coord: {gaze_vector_head}")        
+        
+        yaw = -np.arctan(-direction[0] / direction[1])
+        pitch = np.arctan(-direction[2] / direction[1])
+        #pitch = np.arcsin(-direction[2])
+        #Assume roll = 0.0
+        #print(yaw)
         
         return {
-            'yaw': np.degrees(yaw),
-            'pitch': np.degrees(pitch),
+            'yaw': yaw / 3.14 * 180,
+            'pitch': pitch / 3.14 * 180,
             'roll': 0.0
         }
         
@@ -103,9 +125,7 @@ class StraightProjector():
         
         distance: 距离
         """
-        pixel_coords = np.array(pixel_coords)
-        if pixel_coords.ndim == 1:
-            pixel_coords = np.expand_dims(pixel_coords, axis=0)
+
         # 补全像素坐标
         homogeneous_coords = np.concatenate((pixel_coords, np.ones((pixel_coords.shape[0], 1))), axis=1)  # shape: (N, 3)
 
@@ -134,7 +154,6 @@ class StraightProjector():
         virtual_remote_position = self.to_virtual_coords(remote_real_coords, k)
         gaze_vector = virtual_remote_position - current_real_coords
         gaze_vector_head = self.cam_to_head(gaze_vector)
-        gaze_vector_head = gaze_vector_head[0]
         direction = gaze_vector_head / np.linalg.norm(gaze_vector_head)
         
         yaw = -np.arctan2(direction[1], direction[0])
@@ -179,9 +198,7 @@ class RefractionProjector():
         
         distance: 距离
         """
-        pixel_coords = np.array(pixel_coords)
-        if pixel_coords.ndim == 1:
-            pixel_coords = np.expand_dims(pixel_coords, axis=0)
+
         # 补全像素坐标
         homogeneous_coords = np.concatenate((pixel_coords, np.ones((pixel_coords.shape[0], 1))), axis=1)  # shape: (N, 3)
 
@@ -218,7 +235,6 @@ class RefractionProjector():
         remote_virtual_coords = self.to_virtual_coords(remote_real_coords, 1)
         gaze_vector = remote_virtual_coords - current_real_coords
         gaze_vector_head = self.cam_to_head(gaze_vector)
-        gaze_vector_head = gaze_vector_head[0]
         direction = gaze_vector_head / np.linalg.norm(gaze_vector_head)
         
         yaw = -np.arctan2(direction[1], direction[0])
